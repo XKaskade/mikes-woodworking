@@ -30,7 +30,7 @@
   };
 
   // -----------------------------------------------------------------------
-  // Carousel Engine
+  // Carousel Engine — Multi-photo horizontal scroll strip
   // -----------------------------------------------------------------------
   const carousels = [];
 
@@ -40,7 +40,6 @@
       const slides = $$('.carousel-slide', el);
       const prevBtn = $('.carousel-prev', el);
       const nextBtn = $('.carousel-next', el);
-      const counter = $('.carousel-counter', el);
       const viewport = $('.carousel-viewport', el);
 
       if (slides.length === 0) return;
@@ -50,28 +49,21 @@
         track,
         slides,
         viewport,
-        current: 0,
-        total: slides.length,
+        scrollPos: 0,
         isDragging: false,
-        startX: 0,
-        currentX: 0,
-        dragOffset: 0,
       };
 
       carousels.push(state);
 
-      // Set initial counter
-      updateCounter(state, counter);
-
-      // Arrow navigation
+      // Arrow navigation — scroll by viewport width
       prevBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        goToSlide(state, state.current - 1, counter);
+        scrollCarousel(state, -1);
       });
 
       nextBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        goToSlide(state, state.current + 1, counter);
+        scrollCarousel(state, 1);
       });
 
       // Click on slide → open lightbox
@@ -87,37 +79,30 @@
       });
 
       // Touch / pointer drag support
-      initDrag(state, counter);
+      initDrag(state);
     });
   }
 
-  function goToSlide(state, index, counter) {
-    // Wrap around
-    if (index < 0) index = state.total - 1;
-    if (index >= state.total) index = 0;
+  function scrollCarousel(state, direction) {
+    const viewportWidth = state.viewport.offsetWidth;
+    const scrollAmount = viewportWidth * 0.75;
+    const maxScroll = state.track.scrollWidth - viewportWidth;
 
-    state.current = index;
-    const offset = -(index * 100);
-    state.track.style.transform = `translateX(${offset}%)`;
+    state.scrollPos += direction * scrollAmount;
+    state.scrollPos = Math.max(0, Math.min(state.scrollPos, maxScroll));
+
     state.track.classList.remove('is-dragging');
-
-    if (counter) updateCounter(state, counter);
-  }
-
-  function updateCounter(state, counter) {
-    if (!counter) return;
-    const current = state.current + 1;
-    counter.innerHTML = `<span class="counter-current">${current}</span> / ${state.total}`;
+    state.track.style.transform = `translateX(${-state.scrollPos}px)`;
   }
 
   // -----------------------------------------------------------------------
-  // Touch / Pointer Drag
+  // Touch / Pointer Drag — pixel-based for multi-photo strip
   // -----------------------------------------------------------------------
-  function initDrag(state, counter) {
+  function initDrag(state) {
     const viewport = state.viewport;
     let startX = 0;
     let startY = 0;
-    let currentTranslate = 0;
+    let dragStartPos = 0;
     let isDragging = false;
     let hasMoved = false;
     let isHorizontal = null;
@@ -136,7 +121,7 @@
       isHorizontal = null;
       startX = getClientX(e);
       startY = getClientY(e);
-      currentTranslate = -(state.current * 100);
+      dragStartPos = state.scrollPos;
       state.track.classList.add('is-dragging');
     }
 
@@ -146,12 +131,10 @@
       const dx = getClientX(e) - startX;
       const dy = getClientY(e) - startY;
 
-      // Determine direction on first significant movement
       if (isHorizontal === null && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
         isHorizontal = Math.abs(dx) > Math.abs(dy);
       }
 
-      // If scrolling vertically, bail out
       if (isHorizontal === false) {
         isDragging = false;
         state.track.classList.remove('is-dragging');
@@ -161,9 +144,12 @@
       if (isHorizontal) {
         e.preventDefault();
         hasMoved = true;
-        const viewportWidth = viewport.offsetWidth;
-        const percent = (dx / viewportWidth) * 100;
-        state.track.style.transform = `translateX(${currentTranslate + percent}%)`;
+        const maxScroll = state.track.scrollWidth - viewport.offsetWidth;
+        let newPos = dragStartPos - dx;
+        // Add resistance at edges
+        if (newPos < 0) newPos = newPos * 0.3;
+        if (newPos > maxScroll) newPos = maxScroll + (newPos - maxScroll) * 0.3;
+        state.track.style.transform = `translateX(${-newPos}px)`;
       }
     }
 
@@ -172,32 +158,25 @@
       isDragging = false;
 
       const dx = (e.changedTouches ? e.changedTouches[0].clientX : e.clientX) - startX;
-      const viewportWidth = viewport.offsetWidth;
-      const threshold = viewportWidth * 0.15;
+      const maxScroll = state.track.scrollWidth - viewport.offsetWidth;
 
       state.isDragging = hasMoved;
 
-      if (hasMoved && Math.abs(dx) > threshold) {
-        if (dx < 0) {
-          goToSlide(state, state.current + 1, counter);
-        } else {
-          goToSlide(state, state.current - 1, counter);
-        }
-      } else {
-        // Snap back
-        goToSlide(state, state.current, counter);
-      }
+      // Apply momentum: final position = drag position + extra momentum
+      let newPos = dragStartPos - dx;
+      newPos = Math.max(0, Math.min(newPos, maxScroll));
+      state.scrollPos = newPos;
 
-      // Reset drag flag after a tick so click handler can check it
+      state.track.classList.remove('is-dragging');
+      state.track.style.transform = `translateX(${-state.scrollPos}px)`;
+
       setTimeout(() => { state.isDragging = false; }, 50);
     }
 
-    // Touch events
     viewport.addEventListener('touchstart', onStart, { passive: true });
     viewport.addEventListener('touchmove', onMove, { passive: false });
     viewport.addEventListener('touchend', onEnd, { passive: true });
 
-    // Mouse events (desktop drag)
     viewport.addEventListener('mousedown', (e) => {
       e.preventDefault();
       onStart(e);
@@ -344,11 +323,9 @@
   // Keyboard Navigation for Carousels
   // -----------------------------------------------------------------------
   document.addEventListener('keydown', (e) => {
-    // Don't interfere with lightbox
     if (dom.lightbox.classList.contains('is-open')) return;
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
 
-    // Find which carousel is most in view
     let bestCarousel = null;
     let bestVisibility = 0;
 
@@ -364,12 +341,7 @@
     });
 
     if (bestCarousel) {
-      const counter = $('.carousel-counter', bestCarousel.el);
-      if (e.key === 'ArrowLeft') {
-        goToSlide(bestCarousel, bestCarousel.current - 1, counter);
-      } else {
-        goToSlide(bestCarousel, bestCarousel.current + 1, counter);
-      }
+      scrollCarousel(bestCarousel, e.key === 'ArrowLeft' ? -1 : 1);
     }
   });
 
